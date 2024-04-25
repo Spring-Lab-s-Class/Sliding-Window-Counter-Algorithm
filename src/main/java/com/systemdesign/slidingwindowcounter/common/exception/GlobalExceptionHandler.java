@@ -43,10 +43,4 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(exceptionCode.getStatus())
                 .body(ExceptionResponse.from(exceptionCode.getCode()));
     }
-
-    @ExceptionHandler(RateLimitExceededException.class)
-    public ResponseEntity<ExceptionResponse> handleRateLimitExceededException(RateLimitExceededException e) {
-        return ResponseEntity.status(COMMON_TOO_MANY_REQUESTS.getStatus())
-                .body(ExceptionResponse.from(COMMON_TOO_MANY_REQUESTS.getCode()));
-    }
 }

@@ -1,4 +1,7 @@
-package com.systemdesign.slidingwindowcounter.common.exception;
+package com.systemdesign.slidingwindowcounter.exception;
+
+import com.systemdesign.slidingwindowcounter.common.exception.BusinessException;
+import com.systemdesign.slidingwindowcounter.common.exception.ExceptionCode;
 
 public class RateLimitExceededException extends BusinessException {
 
