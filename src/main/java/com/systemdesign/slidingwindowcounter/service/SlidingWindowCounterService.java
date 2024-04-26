@@ -33,54 +33,51 @@ public class SlidingWindowCounterService {
         // 현재 윈도우의 시작 시간 계산
         double startTimeCurrentWindow = calculateTimeRange(currentTimestamp);
 
-        // 이전 윈도우의 시작 시간 계산
-        double startTimePreviousWindow = calculateTimeRange(currentTimestamp - SLIDING_WINDOW_COUNTER_DURATION * 1000);
-
         //식별자 - 현재의 타임 스탬프와 UUID 조합
         String uniqueRequestIdentifier = String.valueOf(currentTimestamp) + ":" + UUID.randomUUID().toString();
 
         return reactiveRedisTemplate.opsForZSet()
-                .add(redisKey, uniqueRequestIdentifier, currentTimestamp)
-                .flatMap(success -> {
-                    if (!success) {
-                        return Mono.empty();
-                    }
+                .count(redisKey, Range.closed(startTimeCurrentWindow, (double) currentTimestamp))
+                .defaultIfEmpty(0L)
+                .flatMap(previousCount -> reactiveRedisTemplate.opsForZSet()
+                        .add(redisKey, uniqueRequestIdentifier, currentTimestamp)
+                        .flatMap(success -> {
+                            if (!success) {
+                                return Mono.empty();
+                            }
 
-                    // 이전 윈도우의 요청 수를 가져옴
-                    Mono<Long> currentCountValue = reactiveRedisTemplate.opsForZSet()
-                            .count(redisKey, Range.closed(startTimeCurrentWindow, (double) currentTimestamp))
-                            .defaultIfEmpty(0L);
+                            double overlapRate = calculateOverlapRate(currentTimestamp);
 
-                    return currentCountValue.flatMap(previousCount -> {
-                        double overlapRate = calculateOverlapRate(currentTimestamp);
+                            // 현재 요청을 포함한 최종 요청 수 계산
+                            long totalCount;
+                            if (previousCount == 0) {
+                                totalCount = 1;
+                                log.info("Init Sliding Window Counter count: {}", totalCount);
+                            } else {
+                                totalCount = Math.round(1 + (previousCount * overlapRate));
+                                log.info("Adjusted Sliding Window Counter count: {}", totalCount);
+                            }
 
-                        // 현재 요청을 포함한 최종 요청 수 계산
-                        long totalCount = Math.round(1 + (previousCount * overlapRate));
-                        log.info("Adjusted Sliding Window Counter count: {}", totalCount);
-
-                        log.info("Sliding Window Counter count: {}", totalCount);
-                        log.debug("previousCountValue Sliding Window Counter count: {}", currentCountValue);
-                        log.debug("overlapRate Window Counter count: {}", overlapRate);
-                        if (totalCount >= SLIDING_WINDOW_COUNTER_MAX_REQUEST) {
-                            log.error("Rate limit exceeded. key: {}", redisKey);
-                            return Mono.<SlidingWindowCounterProfileResponse>error(
-                                    new RateLimitExceededException(RateExceptionCode.COMMON_TOO_MANY_REQUESTS, totalCount)
-                            );
-                        } else {
-                            return Mono.just(
-                                    SlidingWindowCounterProfileResponse.from(
-                                            List.of(SlidingWindowCounterResponse.from(redisKey, totalCount))
-                                    )
-                            );
-                        }
-                    });
-                })
+                            log.info("Sliding Window Counter count: {}", totalCount);
+                            if (totalCount >= SLIDING_WINDOW_COUNTER_MAX_REQUEST) {
+                                log.error("Rate limit exceeded. key: {}", redisKey);
+                                return Mono.error(
+                                        new RateLimitExceededException(RateExceptionCode.COMMON_TOO_MANY_REQUESTS, totalCount)
+                                );
+                            } else {
+                                return Mono.just(
+                                        SlidingWindowCounterProfileResponse.from(
+                                                List.of(SlidingWindowCounterResponse.from(redisKey, totalCount))
+                                        )
+                                );
+                            }
+                        }))
                 // 에러 로깅
                 .doOnError(error -> {
                     log.error("An error occurred: {}", error.getMessage());
                 })
                 .onErrorResume(error -> {
-                    // 에러가 발생했을 때 에러 처리
+                    // 에러가 발생하면 RateLimitExceededException을 반환
                     return Mono.error(new RateLimitExceededException(RateExceptionCode.COMMON_TOO_MANY_REQUESTS, 0L));
                 });
     }
@@ -91,8 +88,7 @@ public class SlidingWindowCounterService {
         log.info("Sliding Window Counter find all. key: {}", redisKey);
 
         return reactiveRedisTemplate.opsForZSet().rangeByScore(redisKey,
-                        Range.closed(Double.MIN_VALUE, (double) currentTimestamp))
-                //Range.closed(calculateTimeRange(currentTimestamp), (double) currentTimestamp))
+                        Range.closed(calculateTimeRange(currentTimestamp), (double) currentTimestamp))
                 .map(value -> {
                     String[] parts = value.toString().split(":");
                     long timestamp = Long.parseLong(parts[0]);
@@ -112,7 +108,7 @@ public class SlidingWindowCounterService {
         // 겹치는 시간의 길이를 계산
         double overlapDuration = (startTimeCurrentWindow - startTimePreviousWindow) / 1000.0;
 
-        // 겹치는 시간 비율을 계산 (윈도우 지속 시간으로 나눔)
+        // 겹치는 시간 비율을 계산
         double overlapRate = overlapDuration / SLIDING_WINDOW_COUNTER_DURATION;
 
         return overlapRate;
